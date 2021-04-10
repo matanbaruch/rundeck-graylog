@@ -1,0 +1,68 @@
+version: '3'
+services:
+  # MongoDB: https://hub.docker.com/_/mongo/
+  mongodb:
+    image: mongo:4.2
+  # Elasticsearch: https://www.elastic.co/guide/en/elasticsearch/reference/7.10/docker.html
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch-oss:7.10.2
+    restart: always
+    environment:
+      - http.host=0.0.0.0
+      - transport.host=localhost
+      - network.host=0.0.0.0
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+  # Graylog: https://hub.docker.com/r/graylog/graylog/
+  graylog:
+    image: graylog/graylog:4.0
+    environment:
+      # CHANGE ME (must be at least 16 characters)!
+      - GRAYLOG_PASSWORD_SECRET=somepasswordpepper
+      # Password: admin
+      - GRAYLOG_ROOT_PASSWORD_SHA2=8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918
+      - GRAYLOG_HTTP_EXTERNAL_URI=http://127.0.0.1:9000/
+    entrypoint: /usr/bin/tini -- wait-for-it elasticsearch:9200 --  /docker-entrypoint.sh
+    links:
+      - mongodb:mongo
+      - elasticsearch
+    restart: always
+    depends_on:
+      - mongodb
+      - elasticsearch
+    ports:
+      # Graylog web interface and REST API
+      - 9000:9000
+      # Syslog TCP
+      - 1514:1514
+      # Syslog UDP
+      - 1514:1514/udp
+      # GELF TCP
+      - 12201:12201
+      # GELF UDP
+      - 12201:12201/udp
+  logstash:
+    image: docker.elastic.co/logstash/logstash:7.10.2
+    command: bash -c "bin/logstash-plugin install logstash-output-gelf && logstash -f /etc/logstash/conf.d/logstash.conf"
+    links:
+      - graylog:graylog
+      - elasticsearch
+    restart: always
+    volumes:
+      - ./logstash-configurations/logstash-sample.conf:/etc/logstash/conf.d/logstash.conf
+    depends_on:
+      - graylog
+    ports:
+      - 9700:9700
+  rundeck:
+    image: rundeck/rundeck:3.3.10
+    restart: always
+    volumes:
+      - ./rundeck-configurations/framework.properties:/etc/remco/templates/framework.properties
+      - ./rundeck-configurations/rundeck-config.properties:/etc/remco/templates/rundeck-config.properties
+      - ./rundeck-configurations/LogstashPlugin.groovy:/home/rundeck/libext/LogstashPlugin.groovy 
+    links:
+      - logstash
+    depends_on:
+      - logstash
+    ports:
+      - 4440:4440
